@@ -114,6 +114,54 @@ extension Runner {
     }
   }
 
+  /// Execute the ``CustomExecutionTrait/execute(_:for:)`` functions associated
+  /// with the test in a plan step.
+  ///
+  /// - Parameters:
+  ///   - step: The step being performed. If this argument is `nil`, `body` is
+  ///     immediately executed.
+  ///   - body: A function to execute from within the
+  ///           ``CustomExecutionTrait/execute(_:for:)`` functions of each trait
+  ///            applied to `step.test`.
+  ///
+  /// - Throws: Whatever is thrown by `body` or by any of the
+  ///   ``CustomExecutionTrait/execute(_:for:)`` functions.
+  ///
+  /// If `step` is not `nil`, this function also sets the current test (via
+  /// ``Test/current``) during the execution of `body`. This allows traits'
+  /// ``CustomExecutionTrait/execute(_:for:)`` functions to record issues, etc.
+  private func _executeTraits(
+    for step: Plan.Step?,
+    _ body: @escaping () async throws -> Void
+  ) async throws {
+    // If this step is nil, simply execute `body` as-is.
+    guard let test = step?.test else {
+      return try await body()
+    }
+
+    if case .skip = step?.action {
+      return try await body()
+    }
+
+    // Construct a recursive function that invokes each trait's ``execute(_:for:)``
+    // function. The order of the sequence is reversed so that the last trait is
+    // the one that invokes body, then the second-to-last invokes the last, etc.
+    // and ultimately the first trait is the first one to be invoked.
+    let executeAllTraits: () async throws -> Void = test.traits.lazy
+      .reversed()
+      .compactMap { $0 as? any CustomExecutionTrait }
+      .compactMap { $0.execute(_:for:) }
+      .reduce(body) { executeAllTraits, traitExecutor in
+        { [executeAllTraits] in
+          try await traitExecutor(executeAllTraits, test)
+        }
+      }
+
+    try await Test.withCurrent(test) {
+      try await executeAllTraits()
+    }
+  }
+
   /// Run this test.
   ///
   /// - Parameters:
@@ -171,8 +219,8 @@ extension Runner {
       }
     }
 
-    if let step = stepGraph.value, case .run = step.action, let testCases = step.test.testCases {
-      try await Test.withCurrent(step.test) {
+    try await _executeTraits(for: stepGraph.value) {
+      if let step = stepGraph.value, case .run = step.action, let testCases = step.test.testCases {
         try await _withErrorHandling(for: step, sourceLocation: step.test.sourceLocation) {
           try await _runTestCases(testCases, within: step)
         }

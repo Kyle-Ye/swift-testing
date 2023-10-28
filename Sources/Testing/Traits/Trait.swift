@@ -64,6 +64,45 @@ public protocol SuiteTrait: Trait {
   var isRecursive: Bool { get }
 }
 
+/// A protocol extending ``Trait`` that offers an additional customization point
+/// for trait authors to execute code before and after each test function (if
+/// added to the traits of a test function), or before and after each test suite
+/// (if added to the traits of a test suite).
+public protocol CustomExecutionTrait: Trait {
+
+  /// Execute a function with the effects of this trait applied.
+  ///
+  /// - Parameters:
+  ///   - function: The function to perform. If `test` represents a test suite,
+  ///     this function encapsulates running all the tests in that suite. If
+  ///     `test` represents a test function, this function is the body of that
+  ///     test function (including all cases if it is parameterized.)
+  ///   - test: The test under which `function` is being performed.
+  ///
+  /// - Throws: Whatever is thrown by `function`, or an error preventing the
+  ///   trait from running correctly.
+  ///
+  /// This method is called for each trait on a test suite or test function and
+  /// allows additional work to be performed before or after the test runs.
+  /// Issues recorded by this function are recorded against `test`.
+  ///
+  /// - Note: If a test function or test suite is skipped, this function does
+  ///   not get invoked by the runner.
+  ///
+  /// The default implementation of this function invokes `function` and
+  /// returns its result or rethrows any error it throws.
+  func execute(_ function: () async throws -> Void, for test: Test) async throws
+}
+
+extension CustomExecutionTrait {
+  public func execute(
+    _ function: () async throws -> Void,
+    for test: Test
+  ) async throws {
+    try await function()
+  }
+}
+
 extension Trait {
   public func prepare(for test: Test) async throws {}
 
